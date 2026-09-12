@@ -111,7 +111,12 @@ impl SocksConfig {
     where
         T: Read + Write + Unpin,
     {
-        let address = match host.parse::<IpAddr>() {
+        // URI hosts retain IPv6 brackets; SOCKS address classification must not.
+        let ip_host = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(&host);
+        let address = match ip_host.parse::<IpAddr>() {
             Ok(ip) => Address::Socket(SocketAddr::new(ip, port)),
             Err(_) if host.len() <= 255 => {
                 if self.local_dns {
@@ -270,6 +275,57 @@ where
         Handshaking {
             fut: Box::pin(fut),
             _marker: Default::default(),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod tests {
+    use super::*;
+    use crate::rt::TokioIo;
+
+    #[tokio::test]
+    async fn uri_hosts_preserve_socks_address_types() {
+        let cases = [
+            (
+                "http://[2001:db8::1]:443",
+                vec![
+                    5, 1, 0, 4, 32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 187,
+                ],
+            ),
+            (
+                "http://127.0.0.1:443",
+                vec![5, 1, 0, 1, 127, 0, 0, 1, 1, 187],
+            ),
+            (
+                "http://example.test:443",
+                [vec![5, 1, 0, 3, 12], b"example.test".to_vec(), vec![1, 187]].concat(),
+            ),
+        ];
+        for (destination, expected_request) in cases {
+            for local_dns in [false, true] {
+                // Domain resolution belongs to the proxy in this fixture.
+                if local_dns && destination.contains("example.test") {
+                    continue;
+                }
+                let destination: Uri = destination.parse().unwrap();
+                let peer = tokio_test::io::Builder::new()
+                    .write(&[5, 1, 0])
+                    .read(&[5, 0])
+                    .write(&expected_request)
+                    .read(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                    .build();
+                let mut config = SocksConfig::new("http://127.0.0.1:1080".parse().unwrap());
+                config.local_dns = local_dns;
+                config
+                    .execute::<_, std::io::Error>(
+                        TokioIo::new(peer),
+                        destination.host().unwrap().to_owned(),
+                        destination.port_u16().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
         }
     }
 }
