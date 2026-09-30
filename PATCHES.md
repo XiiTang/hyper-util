@@ -19,3 +19,13 @@ resolver answers, proxy-side DNS and username/password authentication.
 Boundless consumes a full commit SHA. Before updating that pin, compare with the
 upstream release and run both fork and downstream regressions. Remove the fork
 override when an official release provides this behavior and those checks pass.
+
+## Proxy authentication guard
+
+Tunnel and SOCKS5 connectors accept an optional caller-owned RequestGuard.
+CONNECT checks after TCP/TLS connection establishment and immediately before
+writing its authorization-bearing request. SOCKS5 checks before negotiation
+and again after the greeting, immediately before username/password dispatch.
+Guard failures retain the original error source. No guard affects application
+traffic after an authenticated tunnel is established. Boundless's owned proxy
+fixtures cover waits crossing expiry and zero credential bytes after refusal.
