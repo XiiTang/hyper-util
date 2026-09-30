@@ -2,8 +2,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower_service::Service;
 
-use hyper_util::client::legacy::connect::proxy::{SocksV4, SocksV5, Tunnel};
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::connect::proxy::{SocksV4, SocksV5, Tunnel};
 
 #[cfg(not(miri))]
 #[tokio::test]
@@ -475,4 +475,35 @@ async fn test_socks_v5_optimistic_works() {
 
     t1.await.expect("task - client");
     t2.await.expect("task - proxy");
+}
+
+#[tokio::test]
+async fn fragmented_connect_preserves_bytes_following_the_response_header() {
+    for split in [1, 8, 12, 17] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+            }
+            let response = b"HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\nTUNNEL";
+            stream.write_all(&response[..split]).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            stream.write_all(&response[split..]).await.unwrap();
+        });
+        let mut connector = Tunnel::new(proxy, HttpConnector::new());
+        let connection = connector
+            .call("https://origin.test".parse().unwrap())
+            .await
+            .unwrap();
+        let mut stream = connection.into_inner();
+        let mut bytes = [0; 6];
+        stream.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"TUNNEL");
+        server.await.unwrap();
+    }
 }

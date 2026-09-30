@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
-use std::task::{self, ready, Poll};
+use std::task::{self, Poll, ready};
 
 use http::{HeaderMap, HeaderValue, Uri};
 use hyper::rt::{Read, Write};
@@ -204,29 +204,32 @@ where
     let mut pos = 0;
 
     loop {
-        let n = crate::rt::read(&mut conn, &mut buf[pos..])
+        if pos == buf.len() {
+            return Err(TunnelError::ProxyHeadersTooLong);
+        }
+        // The generic connector has no unread operation. Reading one byte here
+        // leaves every tunneled byte in the original transport.
+        let n = crate::rt::read(&mut conn, &mut buf[pos..pos + 1])
             .await
             .map_err(TunnelError::Io)?;
-
         if n == 0 {
             return Err(TunnelError::TunnelUnexpectedEof);
         }
         pos += n;
-
-        let recvd = &buf[..pos];
-        if recvd.starts_with(b"HTTP/1.1 200") || recvd.starts_with(b"HTTP/1.0 200") {
-            if recvd.ends_with(b"\r\n\r\n") {
-                return Ok(conn);
-            }
-            if pos == buf.len() {
-                return Err(TunnelError::ProxyHeadersTooLong);
-            }
-        // else read more
-        } else if recvd.starts_with(b"HTTP/1.1 407") {
-            return Err(TunnelError::ProxyAuthRequired);
-        } else {
-            return Err(TunnelError::TunnelUnsuccessful);
+        if !buf[..pos].ends_with(b"\r\n\r\n") {
+            continue;
         }
+        let mut headers = [httparse::EMPTY_HEADER; 128];
+        let mut response = httparse::Response::new(&mut headers);
+        match response.parse(&buf[..pos]) {
+            Ok(httparse::Status::Complete(_)) => {}
+            _ => return Err(TunnelError::TunnelUnsuccessful),
+        }
+        return match response.code {
+            Some(200..=299) => Ok(conn),
+            Some(407) => Err(TunnelError::ProxyAuthRequired),
+            _ => Err(TunnelError::TunnelUnsuccessful),
+        };
     }
 }
 

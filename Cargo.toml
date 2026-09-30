@@ -23,6 +23,7 @@ bytes = "1.7.1"
 futures-channel = { version = "0.3", optional = true }
 futures-util = { version = "0.3.16", default-features = false, optional = true }
 http = "1.0"
+httparse = "1.10"
 http-body = "1.0.0"
 hyper = "1.8.0"
 ipnet = { version = "2.9", optional = true }
