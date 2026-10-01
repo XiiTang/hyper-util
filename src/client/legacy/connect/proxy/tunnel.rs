@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
-use std::task::{self, ready, Poll};
+use std::task::{self, Poll, ready};
 
 use http::{HeaderMap, HeaderValue, Uri};
 use hyper::rt::{Read, Write};
@@ -216,6 +216,7 @@ where
 
     let mut buf = [0; 8192];
     let mut pos = 0;
+    let mut start = 0;
 
     loop {
         if pos == buf.len() {
@@ -235,9 +236,13 @@ where
         }
         let mut headers = [httparse::EMPTY_HEADER; 128];
         let mut response = httparse::Response::new(&mut headers);
-        match response.parse(&buf[..pos]) {
+        match response.parse(&buf[start..pos]) {
             Ok(httparse::Status::Complete(_)) => {}
             _ => return Err(TunnelError::TunnelUnsuccessful),
+        }
+        if matches!(response.code, Some(100..=199)) && response.code != Some(101) {
+            start = pos;
+            continue;
         }
         return match response.code {
             Some(200..=299) => Ok(conn),
