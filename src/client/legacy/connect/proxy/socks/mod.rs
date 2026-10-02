@@ -51,31 +51,25 @@ where
     let mut tmp = [0; 513];
 
     loop {
-        let n = crate::rt::read(&mut conn, &mut tmp).await?;
-        buf.extend_from_slice(&tmp[..n]);
-
         let mut view = &buf[..];
         match M::try_from(&mut view) {
-            Err(ParsingError::Incomplete) => {
-                if n == 0 {
-                    if buf.spare_capacity_mut().is_empty() {
-                        return Err(SocksError::Parsing(ParsingError::WouldOverflow));
-                    } else {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::UnexpectedEof,
-                            "unexpected eof",
-                        )
-                        .into());
-                    }
-                }
-            }
-            Err(err) => return Err(err.into()),
             Ok(res) => {
                 let consumed = buf.len() - view.len();
                 buf.advance(consumed);
                 return Ok(res);
             }
+            Err(ParsingError::Incomplete) => {}
+            Err(err) => return Err(err.into()),
         }
+        // A previous read can contain several handshake responses. Parse the
+        // retained bytes before waiting for more from a still-open connection.
+        let n = crate::rt::read(&mut conn, &mut tmp).await?;
+        if n == 0 {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected eof").into(),
+            );
+        }
+        buf.extend_from_slice(&tmp[..n]);
     }
 }
 
@@ -175,7 +169,7 @@ mod test {
     use tokio::io::AsyncWriteExt;
 
     use super::v5::messages::{ProxyRes, Status};
-    use super::{SocksError, read_message};
+    use super::{read_message, SocksError};
     use crate::rt::TokioIo;
 
     // A SOCKS5 ProxyRes message. Successful, bound to 127.0.0.1:8080.
@@ -213,5 +207,58 @@ mod test {
         assert_eq!(m.unwrap(), ProxyRes(Status::Success));
 
         _writer.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod parsing_boundary_tests {
+    use super::*;
+    use crate::rt::TokioIo;
+    use v5::messages::{Address, AuthenticationRes, NegotiationRes, ProxyRes, Status};
+
+    #[tokio::test]
+    async fn every_reply_split_retains_the_prefix_until_complete() {
+        let replies = [
+            vec![5, 0, 0, 1, 127, 0, 0, 1, 0x1f, 0x90],
+            [vec![5, 0, 0, 4], vec![0; 16], vec![0x1f, 0x90]].concat(),
+            [vec![5, 0, 0, 3, 3], b"abc".to_vec(), vec![0x1f, 0x90]].concat(),
+        ];
+        for reply in replies {
+            for cut in 1..reply.len() {
+                let peer = tokio_test::io::Builder::new()
+                    .read(&reply[..cut])
+                    .read(&reply[cut..])
+                    .build();
+                let mut peer = TokioIo::new(peer);
+                let mut buf = BytesMut::with_capacity(513);
+                let result: Result<ProxyRes, SocksError<std::io::Error>> =
+                    read_message(&mut peer, &mut buf).await;
+                assert_eq!(result.unwrap().0, Status::Success);
+                assert!(buf.is_empty());
+            }
+            let mut address = &reply[3..];
+            if let Address::Domain(host, port) = Address::try_from(&mut address).unwrap() {
+                assert_eq!(host, "abc");
+                assert_eq!(port, 8080);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn coalesced_responses_are_parsed_without_another_socket_read() {
+        let peer = tokio_test::io::Builder::new()
+            .read(&[5, 2, 1, 0])
+            .read_error(std::io::Error::other("another read must not be needed"))
+            .build();
+        let mut peer = TokioIo::new(peer);
+        let mut buf = BytesMut::with_capacity(513);
+        let first: Result<NegotiationRes, SocksError<std::io::Error>> =
+            read_message(&mut peer, &mut buf).await;
+        first.unwrap();
+        assert_eq!(&buf[..], &[1, 0]);
+        let second: Result<AuthenticationRes, SocksError<std::io::Error>> =
+            read_message(&mut peer, &mut buf).await;
+        assert!(second.unwrap().0);
+        assert!(buf.is_empty());
     }
 }
