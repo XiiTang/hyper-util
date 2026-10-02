@@ -17,8 +17,6 @@ use hyper::rt::Read;
 pub enum SocksError<C> {
     Inner(C),
     Io(std::io::Error),
-    /// Authority rejected before a credential-bearing write.
-    Guard(Box<dyn std::error::Error + Send + Sync>),
 
     DnsFailure,
     MissingHost,
@@ -80,7 +78,6 @@ impl<C> std::fmt::Display for SocksError<C> {
         match self {
             Self::Inner(_) => f.write_str("failed to create underlying connection"),
             Self::Io(_) => f.write_str("io error during SOCKS handshake"),
-            Self::Guard(_) => f.write_str("SOCKS authority rejected"),
 
             Self::DnsFailure => f.write_str("could not resolve to acceptable address type"),
             Self::MissingHost => f.write_str("missing destination host"),
@@ -95,15 +92,7 @@ impl<C> std::fmt::Display for SocksError<C> {
     }
 }
 
-impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Guard(error) => Some(&**error),
-            Self::Io(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {}
 
 impl<C> From<std::io::Error> for SocksError<C> {
     fn from(err: std::io::Error) -> Self {

@@ -19,7 +19,6 @@ pub struct Tunnel<C> {
     headers: Headers,
     inner: C,
     proxy_dst: Uri,
-    auth_guard: Option<hyper::ext::RequestGuard>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,14 +70,7 @@ impl<C> Tunnel<C> {
             headers: Headers::Empty,
             inner: connector,
             proxy_dst,
-            auth_guard: None,
         }
-    }
-
-    /// Check authority after connecting, immediately before sending CONNECT.
-    pub fn with_auth_guard(mut self, guard: hyper::ext::RequestGuard) -> Self {
-        self.auth_guard = Some(guard);
-        self
     }
 
     /// Add `proxy-authorization` header value to the CONNECT request.
@@ -142,18 +134,12 @@ where
     fn call(&mut self, dst: Uri) -> Self::Future {
         let connecting = self.inner.call(self.proxy_dst.clone());
         let headers = self.headers.clone();
-        let auth_guard = self.auth_guard.clone();
 
         Tunneling {
             fut: Box::pin(async move {
                 let conn = connecting
                     .await
                     .map_err(|e| TunnelError::ConnectFailed(e.into()))?;
-                if let Some(guard) = auth_guard {
-                    guard
-                        .check()
-                        .map_err(|error| TunnelError::Io(std::io::Error::other(error)))?;
-                }
                 tunnel(
                     conn,
                     dst.host().ok_or(TunnelError::MissingHost)?,

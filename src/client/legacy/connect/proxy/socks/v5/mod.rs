@@ -30,7 +30,6 @@ pub struct SocksV5<C> {
 pub struct SocksConfig {
     proxy: Uri,
     proxy_auth: Option<(String, String)>,
-    auth_guard: Option<hyper::ext::RequestGuard>,
 
     local_dns: bool,
     optimistic: bool,
@@ -73,13 +72,6 @@ impl<C> SocksV5<C> {
         self
     }
 
-    /// Check authority before beginning the handshake and after negotiation,
-    /// immediately before sending user/password authentication.
-    pub fn with_auth_guard(mut self, guard: hyper::ext::RequestGuard) -> Self {
-        self.config.auth_guard = Some(guard);
-        self
-    }
-
     /// Resolve domain names locally on the client, rather than on the proxy server.
     ///
     /// Disabled by default as local resolution of domain names can be detected as a
@@ -109,7 +101,6 @@ impl SocksConfig {
         Self {
             proxy,
             proxy_auth: None,
-            auth_guard: None,
 
             local_dns: false,
             optimistic: false,
@@ -120,9 +111,6 @@ impl SocksConfig {
     where
         T: Read + Write + Unpin,
     {
-        if let Some(guard) = &self.auth_guard {
-            guard.check().map_err(SocksError::Guard)?;
-        }
         let address = match host.parse::<IpAddr>() {
             Ok(ip) => Address::Socket(SocketAddr::new(ip, port)),
             Err(_) if host.len() <= 255 => {
@@ -195,9 +183,6 @@ impl SocksConfig {
                 }
 
                 State::SendingAuthReq => {
-                    if let Some(guard) = &self.auth_guard {
-                        guard.check().map_err(SocksError::Guard)?;
-                    }
                     let (user, pass) = self.proxy_auth.as_ref().unwrap();
                     let req = AuthenticationReq(user, pass);
 
