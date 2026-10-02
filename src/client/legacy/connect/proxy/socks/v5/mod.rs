@@ -123,12 +123,7 @@ impl SocksConfig {
         if let Some(guard) = &self.auth_guard {
             guard.check().map_err(SocksError::Guard)?;
         }
-        // URI hosts retain IPv6 brackets; SOCKS address classification must not.
-        let ip_host = host
-            .strip_prefix('[')
-            .and_then(|host| host.strip_suffix(']'))
-            .unwrap_or(&host);
-        let address = match ip_host.parse::<IpAddr>() {
+        let address = match host.parse::<IpAddr>() {
             Ok(ip) => Address::Socket(SocketAddr::new(ip, port)),
             Err(_) if host.len() <= 255 => {
                 if self.local_dns {
