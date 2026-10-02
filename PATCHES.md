@@ -3,10 +3,10 @@
 Based on upstream `v0.1.20` (`b23a13e2b7ee73e15ba008cd9b19dcd2d3861957`).
 Retain upstream history and license; keep application behavior outside this fork.
 
-`src/client/legacy/connect/proxy/socks/v5/mod.rs` strips URI IPv6 brackets for
-IP-address classification. Without this change an IPv6 literal is encoded as a
-SOCKS domain. The original hostname remains intact for proxy-side DNS. This patch
-adds no DNS lookup, retry or route fallback.
+URI IPv6 brackets are normalized before connection setup using the shared
+upstream helper from #302/#306. The original fork-specific classification branch
+has been removed. Literals retain their IP wire address types and domains retain
+proxy-side DNS behavior. This patch adds no DNS lookup, retry or route fallback.
 
 ```sh
 cargo test --features full --lib uri_hosts_preserve_socks_address_types
