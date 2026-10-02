@@ -334,7 +334,7 @@ mod tests {
                 config
                     .execute::<_, std::io::Error>(
                         TokioIo::new(peer),
-                        destination.host().unwrap().to_owned(),
+                        crate::client::strip_ipv6_brackets(destination.host().unwrap()).to_owned(),
                         destination.port_u16().unwrap(),
                     )
                     .await
