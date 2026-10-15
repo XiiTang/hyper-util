@@ -33,3 +33,27 @@ does not yet return buffered early bytes. No retry or route fallback is added.
 Validation: `cargo test --features full --lib` using the matching Boundless hyper
 override: 82 passed, one existing ignore on macOS arm64.
 
+## Executor-owned client diagnostics (issue #63, batch 5)
+
+The client executor handoff now carries `Result<(), Box<dyn Error + Send +
+Sync>>`. Connection, post-response readiness and losing background dial errors
+reach it with their sources intact. Infallible maintenance tasks are mapped
+to Ok; the public generic Executor trait and TokioExecutor are unchanged.
+A connection's establishment error has one shared slot: readiness takes it
+for the request, or a dropped/successful waiter releases it to the background
+task. The task ends Ok after delivery, so it cannot duplicate the request's
+error. Dropping a waiter after publication cannot discard the only error.
+
+Using the matching Boundless hyper override,
+`cargo test --features full --test task_results` passes four regressions
+(exit 0), and `cargo test --features full --lib cancelled_waiter_leaves`
+passes the handoff regression (exit 0) on macOS arm64. These exercise actual
+connections, readiness after a successful response, a losing dial, delivery
+without duplication and the cancellation window. Baseline comparison and
+the affected suites also ran: the original result-erasing implementation
+fails the connection/readiness/losing-dial regressions (exit 101); the patch
+passes (exit 0). All 83 library checks (one existing ignore) and all 21 legacy
+client integration checks pass (exit 0). Strict Clippy remains blocked by
+exactly the same diagnostic messages as the original source (exit 101), with
+no suppressions or unrelated repairs.
+

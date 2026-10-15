@@ -6,7 +6,24 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-pub(crate) type BoxSendFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
+pub(crate) type BoxSendFuture = Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
+
+// Infallible maintenance/upgrade tasks and fallible client tasks share the
+// same result-bearing handoff. The public Executor trait remains generic.
+pub(crate) trait TaskOutput {
+    fn into_result(self) -> Result<(), BoxError>;
+}
+impl TaskOutput for () {
+    fn into_result(self) -> Result<(), BoxError> {
+        Ok(())
+    }
+}
+impl<E: Into<BoxError>> TaskOutput for Result<(), E> {
+    fn into_result(self) -> Result<(), BoxError> {
+        self.map_err(Into::into)
+    }
+}
 
 // Either the user provides an executor for background tasks, or we use
 // `tokio::spawn`.
@@ -27,11 +44,12 @@ impl Exec {
 
     pub(crate) fn execute<F>(&self, fut: F)
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future + Send + 'static,
+        F::Output: TaskOutput,
     {
         match *self {
             Exec::Executor(ref e) => {
-                e.execute(Box::pin(fut));
+                e.execute(Box::pin(async move { fut.await.into_result() }));
             }
         }
     }
@@ -45,7 +63,8 @@ impl fmt::Debug for Exec {
 
 impl<F> hyper::rt::Executor<F> for Exec
 where
-    F: Future<Output = ()> + Send + 'static,
+    F: Future + Send + 'static,
+    F::Output: TaskOutput,
 {
     fn execute(&self, fut: F) {
         Exec::execute(self, fut);
