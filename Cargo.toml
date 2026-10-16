@@ -37,6 +37,7 @@ tower-layer = { version = "0.3", optional = true }
 tower-service = { version = "0.3", optional = true }
 
 [dev-dependencies]
+h2 = "0.4.14"
 hyper = { version = "1.4.0", features = ["full"] }
 bytes = "1"
 futures-util = { version = "0.3.16", default-features = false, features = ["alloc"] }

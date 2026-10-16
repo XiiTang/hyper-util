@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::task::{self, Poll};
 use std::time::Duration;
 
-use futures_util::future::{self, Either, TryFutureExt};
+use futures_util::future::{self, Either, FutureExt, TryFutureExt};
 use http::uri::Scheme;
 use hyper::client::conn::TrySendError as ConnTrySendError;
 use hyper::header::{HeaderValue, HOST};
@@ -358,7 +358,9 @@ where
         if pooled.is_http2() || !pooled.is_pool_enabled() || pooled.is_ready() {
             drop(pooled);
         } else {
-            let on_idle = poll_fn(move |cx| pooled.poll_ready(cx));
+            // Reuse readiness only decides whether this sender returns to the
+            // pool. The connection task owns any actual transport failure.
+            let on_idle = poll_fn(move |cx| pooled.poll_ready(cx)).map(|_| ());
             self.exec.execute(on_idle);
         }
 
@@ -433,9 +435,14 @@ where
                 // If it *wasn't* ready yet, then the connect future will
                 // have been started...
                 if connecting.started() {
-                    let bg = connecting.map_ok(|_pooled| {
-                        // dropping here should just place it in
-                        // the Pool for us...
+                    let bg = connecting.then(|result| async move {
+                        match result {
+                            Ok(_pooled) => Ok(()), // Drop returns it to the pool.
+                            // Another ALPN h2 attempt won the pool's connecting
+                            // lock. This is disposal of the losing attempt.
+                            Err(error) if error.is_canceled() => Ok(()),
+                            Err(error) => Err(error),
+                        }
                     });
                     // An execute error here isn't important, we're just trying
                     // to prevent a waste of a socket...
