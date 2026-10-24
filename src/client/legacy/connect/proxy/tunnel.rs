@@ -2,7 +2,7 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::marker::{PhantomData, Unpin};
 use std::pin::Pin;
-use std::task::{self, Poll, ready};
+use std::task::{self, ready, Poll};
 
 use http::{HeaderMap, HeaderValue, Uri};
 use hyper::rt::{Read, Write};

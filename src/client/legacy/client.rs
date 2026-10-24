@@ -55,6 +55,7 @@ struct Config {
 /// Client errors
 pub struct Error {
     kind: ErrorKind,
+    unstarted_on_reused_connection: bool,
     source: Option<Box<dyn StdError + Send + Sync>>,
     #[cfg(any(feature = "http1", feature = "http2"))]
     connect_info: Option<Connected>,
@@ -75,6 +76,7 @@ macro_rules! e {
     ($kind:ident) => {
         Error {
             kind: ErrorKind::$kind,
+            unstarted_on_reused_connection: false,
             source: None,
             connect_info: None,
         }
@@ -82,6 +84,7 @@ macro_rules! e {
     ($kind:ident, $src:expr) => {
         Error {
             kind: ErrorKind::$kind,
+            unstarted_on_reused_connection: false,
             source: Some($src.into()),
             connect_info: None,
         }
@@ -251,12 +254,13 @@ where
                 Err(TrySendError::Nope(err)) => return Err(err),
                 Err(TrySendError::Retryable {
                     mut req,
-                    error,
+                    mut error,
                     connection_reused,
                 }) => {
                     if !self.config.retry_canceled_requests || !connection_reused {
                         // if client disabled, don't retry
                         // a fresh connection means we definitely can't retry
+                        error.unstarted_on_reused_connection = connection_reused;
                         return Err(error);
                     }
 
@@ -1546,7 +1550,8 @@ impl Builder {
     /// connection was found to be unusable.
     ///
     /// When this is set to `false`, the related `ResponseFuture` would instead
-    /// resolve to an `Error::Cancel`.
+    /// resolve to an error. [`Error::is_unstarted_on_reused_connection`]
+    /// identifies a recovered request on a reused connection.
     ///
     /// Default is `true`.
     #[inline]
@@ -1641,6 +1646,15 @@ impl Error {
     /// Returns true if this was an error from `Connect`.
     pub fn is_connect(&self) -> bool {
         matches!(self.kind, ErrorKind::Connect)
+    }
+
+    /// Whether the request never started on an idle, reused connection.
+    ///
+    /// This fact is retained when `retry_canceled_requests(false)` returns the
+    /// recovered request's error instead of resending it. It is false for fresh
+    /// connections and for errors after the request was taken for dispatch.
+    pub fn is_unstarted_on_reused_connection(&self) -> bool {
+        self.unstarted_on_reused_connection
     }
 
     /// Returns the info of the client connection on which this error occurred.

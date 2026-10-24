@@ -33,3 +33,37 @@ does not yet return buffered early bytes. No retry or route fallback is added.
 Validation: `cargo test --features full --lib` using the matching Boundless hyper
 override: 82 passed, one existing ignore on macOS arm64.
 
+
+## Preserve an unstarted reused-connection failure (driver plan v23 W7a, Rule 8)
+
+At 66402f8, `src/client/legacy/client.rs:257-261` returns the native
+error when `retry_canceled_requests(false)` is set, discarding the
+`connection_reused` fact. `Error::is_canceled` is private (:1659) and cannot
+distinguish that case from other cancellations. The caller cannot identify
+which requests it may resend without parsing text or guessing.
+
+`Error::is_unstarted_on_reused_connection()` now reports the conjunction
+already proven by the legacy client's recovered-request branch and its
+pool's reused flag. The existing return point is the one checkpoint; a
+private error field, initialized false in both constructors, retains the
+fact, with no public setter. Error kind, source and connection information
+are preserved. Existing retry configuration and its `true` default stay.
+This adds no per-attempt callback and performs no additional send.
+
+`tests/reused_connection_retry.rs` holds the native connection driver,
+queues a request on a reused connection, then removes that driver before
+it can take the request. With retry off there is one dial and one warm-up
+wire request, and the returned error retains the fact. With the untouched
+default there is a second dial and request. Clearing only the retained
+fact reproduces the regression (exit 101); the fixed focused test passes
+(exit 0). The test waits on driver and peer state, with a timeout only as
+hang protection.
+
+On macOS arm64, Rust 1.98.1, `cargo test --all-features` passes:
+127 tests, nine ignored (exit 0). `cargo fmt --all --check` passes
+(exit 0). Strict `cargo clippy --all-features --all-targets -- -D warnings`
+exits 101 both on untouched 66402f8 and this patch, with identical error
+categories: 17 library and 22 library-test diagnostics, including pool
+comment style, large request errors, old constructors and server reborrows.
+No lint is suppressed or unrelated repair included. The current formatter
+normalizes one import's order in the existing tunnel module.
