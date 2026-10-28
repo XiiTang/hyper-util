@@ -507,3 +507,37 @@ async fn fragmented_connect_preserves_bytes_following_the_response_header() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn an_invalid_connect_prefix_is_rejected_while_the_proxy_stays_open() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = format!("http://{}", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(stream.read_u8().await.unwrap());
+        }
+        stream.write_all(b"SSH-2.0-peer\r\n").await.unwrap();
+        let mut rest = Vec::new();
+        if let Err(error) = stream.read_to_end(&mut rest).await {
+            // Early rejection may reset TCP while greeting bytes remain unread.
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+        }
+        assert!(rest.is_empty());
+    });
+    let mut connector = Tunnel::new(proxy, HttpConnector::new());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        connector.call("https://origin.test".parse().unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "tunnel error: unsuccessful"
+    );
+    server.await.unwrap();
+}

@@ -67,3 +67,22 @@ categories: 17 library and 22 library-test diagnostics, including pool
 comment style, large request errors, old constructors and server reborrows.
 No lint is suppressed or unrelated repair included. The current formatter
 normalizes one import's order in the existing tunnel module.
+
+## Restore immediate malformed CONNECT rejection (F11)
+
+Start from upstream b23a13e2 `src/client/legacy/connect/proxy/tunnel.rs:206-229`:
+it classifies a received reply immediately and rejects an invalid prefix.
+The retained fork parser now runs its existing httparse parser after each
+byte instead of waiting for the header terminator. Partial valid headers keep
+waiting; malformed bytes fail immediately. The only needed differences from
+upstream remain fragmented-prefix tolerance, informational/2xx parsing, and
+one-byte reads that leave early tunnel bytes in the original transport.
+`an_invalid_connect_prefix_is_rejected_while_the_proxy_stays_open` drives the
+invalid-prefix path; `fragmented_connect_preserves_bytes_following_the_response_header`
+keeps the existing tunnel-boundary regression.
+
+On macOS arm64 with consumer Rust 1.97.0 and its pinned hyper/h2, all-feature
+tests and formatting pass. Strict all-target Clippy is blocked by unchanged
+code (15 library and 20 library-test diagnostics in pool, client/cache, DNS,
+constructors and server reborrows). No diagnostic names the touched parser or
+regression, and those other source files are unchanged from the base.

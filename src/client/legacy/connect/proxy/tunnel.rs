@@ -217,14 +217,12 @@ where
             return Err(TunnelError::TunnelUnexpectedEof);
         }
         pos += n;
-        if !buf[..pos].ends_with(b"\r\n\r\n") {
-            continue;
-        }
         let mut headers = [httparse::EMPTY_HEADER; 128];
         let mut response = httparse::Response::new(&mut headers);
         match response.parse(&buf[start..pos]) {
             Ok(httparse::Status::Complete(_)) => {}
-            _ => return Err(TunnelError::TunnelUnsuccessful),
+            Ok(httparse::Status::Partial) => continue,
+            Err(_) => return Err(TunnelError::TunnelUnsuccessful),
         }
         if matches!(response.code, Some(100..=199)) && response.code != Some(101) {
             start = pos;
