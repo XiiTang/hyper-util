@@ -550,6 +550,8 @@ async fn final_connect_refusals_are_reported_while_the_proxy_stays_open() {
             "tunnel error: proxy authorization required",
         ),
         ("403 Forbidden", "tunnel error: unsuccessful"),
+        ("099 Invalid", "tunnel error: unsuccessful"),
+        ("101 Switching Protocols", "tunnel error: unsuccessful"),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy = format!("http://{}", listener.local_addr().unwrap())

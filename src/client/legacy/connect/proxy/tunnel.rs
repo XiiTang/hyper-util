@@ -226,8 +226,8 @@ where
         // headers. Partial informational/success heads still need their boundary.
         match response.code {
             Some(407) => return Err(TunnelError::ProxyAuthRequired),
-            Some(101 | 300..=999) => return Err(TunnelError::TunnelUnsuccessful),
-            _ => {}
+            Some(100 | 102..=299) | None => {}
+            Some(_) => return Err(TunnelError::TunnelUnsuccessful),
         }
         if status.is_partial() {
             continue;

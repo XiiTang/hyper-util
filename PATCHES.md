@@ -110,3 +110,26 @@ tests (including both held-open refusals) and fmt pass (exit 0). Strict
 all-target Clippy still reports the previously reviewed 15 library / 20
 library-test diagnostics in unchanged files; no parser or new-test diagnostic
 is reported. That baseline blocker is retained, with no suppression/repair.
+
+## Reject every already-refused CONNECT status (review B recheck F11)
+
+Start from upstream b23a13e2 `connect/proxy/tunnel.rs:216-228`: after the
+special 407 result, unsupported replies take TunnelUnsuccessful without
+waiting for more headers. The previous incremental classifier omitted
+parsed 0xx codes and could wait forever on a held-open 099 status line.
+At that same checkpoint, retain only 100 and 102..=299 while waiting for
+the head boundary; any other parsed status is refused, with 407 still
+ProxyAuthRequired and 101 still TunnelUnsuccessful. An unparsed status
+continues parsing. The necessary upstream differences remain fragmented
+valid informational/success heads and one-byte reads preserving tunnel
+bytes. No new parser, retry or timeout mechanism is added.
+
+Extend `final_connect_refusals_are_reported_while_the_proxy_stays_open`
+with 099 and 101 alongside 407/403. With only the test change at 1e7e8fa0,
+the held-open 099 case times out (exit 101); after this correction all
+four refuse immediately while the peer remains open, preserving their
+distinct errors. All-feature tests, including fragmented success and
+early tunnel bytes, and fmt pass with consumer Rust 1.97.0 and pinned
+hyper/h2 (exit 0). Strict all-target Clippy still exits 101 with the same
+15 library / 20 library-test diagnostics in unchanged files; none names
+this classifier or regression. No baseline repair or suppression.
