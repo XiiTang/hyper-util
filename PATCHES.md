@@ -86,3 +86,27 @@ tests and formatting pass. Strict all-target Clippy is blocked by unchanged
 code (15 library and 20 library-test diagnostics in pool, client/cache, DNS,
 constructors and server reborrows). No diagnostic names the touched parser or
 regression, and those other source files are unchanged from the base.
+
+## Preserve immediate final CONNECT refusal (review B F11)
+
+Start from upstream b23a13e2 `connect/proxy/tunnel.rs:225-228`: a known 407
+answers ProxyAuthRequired immediately; other final refusals answer
+TunnelUnsuccessful without awaiting headers or EOF. Port those same exits
+before the incremental parser's Partial continuation. The necessary fork
+difference remains tolerance for fragmented valid informational/2xx heads,
+with one-byte reads preserving the tunnel-byte boundary. A parsed final
+refusal needs no rest-of-head wait. Invalid syntax, I/O errors, EOF and the
+8192-byte budget retain their existing exits.
+
+`final_connect_refusals_are_reported_while_the_proxy_stays_open` supplies
+only a 407 or 403 status line and keeps the real TCP proxy open until its
+client closes. At 8cec82b7 the first case hangs (test exits 101); after this
+change both retain their distinct refusal and the peer sees closure.
+Fragmented success and early tunnel bytes remain covered by the existing
+regression.
+
+On macOS arm64 with consumer Rust 1.97.0 and pinned hyper/h2, all-feature
+tests (including both held-open refusals) and fmt pass (exit 0). Strict
+all-target Clippy still reports the previously reviewed 15 library / 20
+library-test diagnostics in unchanged files; no parser or new-test diagnostic
+is reported. That baseline blocker is retained, with no suppression/repair.

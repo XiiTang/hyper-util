@@ -541,3 +541,45 @@ async fn an_invalid_connect_prefix_is_rejected_while_the_proxy_stays_open() {
     );
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn final_connect_refusals_are_reported_while_the_proxy_stays_open() {
+    for (status, expected) in [
+        (
+            "407 Proxy Authentication Required",
+            "tunnel error: proxy authorization required",
+        ),
+        ("403 Forbidden", "tunnel error: unsuccessful"),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+            }
+            // No terminating blank line and no EOF: only the refused status is known.
+            stream
+                .write_all(format!("HTTP/1.1 {status}\r\n").as_bytes())
+                .await
+                .unwrap();
+            let mut rest = Vec::new();
+            if let Err(error) = stream.read_to_end(&mut rest).await {
+                assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            assert!(rest.is_empty());
+        });
+        let mut connector = Tunnel::new(proxy, HttpConnector::new());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            connector.call("https://origin.test".parse().unwrap()),
+        )
+        .await
+        .expect("a known final refusal must not await headers or EOF");
+        assert_eq!(result.err().unwrap().to_string(), expected);
+        server.await.unwrap();
+    }
+}

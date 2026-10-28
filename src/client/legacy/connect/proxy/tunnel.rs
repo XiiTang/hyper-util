@@ -219,10 +219,18 @@ where
         pos += n;
         let mut headers = [httparse::EMPTY_HEADER; 128];
         let mut response = httparse::Response::new(&mut headers);
-        match response.parse(&buf[start..pos]) {
-            Ok(httparse::Status::Complete(_)) => {}
-            Ok(httparse::Status::Partial) => continue,
-            Err(_) => return Err(TunnelError::TunnelUnsuccessful),
+        let status = response
+            .parse(&buf[start..pos])
+            .map_err(|_| TunnelError::TunnelUnsuccessful)?;
+        // Upstream reports a known refusal without waiting for the remaining
+        // headers. Partial informational/success heads still need their boundary.
+        match response.code {
+            Some(407) => return Err(TunnelError::ProxyAuthRequired),
+            Some(101 | 300..=999) => return Err(TunnelError::TunnelUnsuccessful),
+            _ => {}
+        }
+        if status.is_partial() {
+            continue;
         }
         if matches!(response.code, Some(100..=199)) && response.code != Some(101) {
             start = pos;
