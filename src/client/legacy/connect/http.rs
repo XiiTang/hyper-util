@@ -547,7 +547,8 @@ where
             resolved = resolve(&mut self.resolver, dns::Name::new(host.into()))
                 .await
                 .map_err(ConnectError::dns)?;
-            let addrs = resolved.by_ref()
+            let addrs = resolved
+                .by_ref()
                 .map(|mut addr| {
                     set_port(&mut addr, port, dst.port().is_some());
 

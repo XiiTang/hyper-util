@@ -65,7 +65,9 @@ impl SocketAdmissionRefused {
     where
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
-        Self { cause: cause.into() }
+        Self {
+            cause: cause.into(),
+        }
     }
 }
 impl fmt::Display for SocketAdmissionRefused {
