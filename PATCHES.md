@@ -154,3 +154,11 @@ stringifying the original error. Ordinary native failures stay unmarked.
 Regression ports: tests/socket_ownership.rs and connect::owned::tests;
 execution against this port is pending. Boundless supplies the account, route
 and DNS ownership tests.
+
+The two Service implementations for HttpConnector and SocketConnector now require
+`R::Addrs: Send`. This intentional minimal restriction keeps resolution custody
+across the asynchronous dial: upstream consumes the iterator into SocketAddrs
+before dialing, which would drop Boundless's DNS admission early. Both consumers
+(Boundless and its reqwest fork) already supply Send iterators. This bound at
+those two implementations is the only signature change required by the custody
+port; no other public signature is changed.

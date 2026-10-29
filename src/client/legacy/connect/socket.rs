@@ -130,6 +130,7 @@ impl<R> Service<Uri> for SocketConnector<R>
 where
     R: Resolve + Clone + Send + Sync + 'static,
     R::Future: Send,
+    R::Addrs: Send,
 {
     type Response = TokioIo<OwnedTransport<TcpStream>>;
     type Error = ConnectError;

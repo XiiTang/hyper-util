@@ -458,6 +458,7 @@ impl<R> tower_service::Service<Uri> for HttpConnector<R>
 where
     R: Resolve + Clone + Send + Sync + 'static,
     R::Future: Send,
+    R::Addrs: Send,
 {
     type Response = TokioIo<TcpStream>;
     type Error = ConnectError;
