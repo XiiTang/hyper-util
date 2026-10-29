@@ -29,6 +29,27 @@ pub enum SocksError<C> {
     Serialize(SerializeError),
 }
 
+impl<C> SocksError<C> {
+    /// Borrow an underlying connector failure, if this is one.
+    pub fn connection_error(&self) -> Option<&C> {
+        match self {
+            Self::Inner(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Extract an underlying connector failure, preserving other errors.
+    ///
+    /// # Errors
+    /// Returns this error unchanged when it is not a connector failure.
+    pub fn into_connection_error(self) -> Result<C, Self> {
+        match self {
+            Self::Inner(error) => Ok(error),
+            other => Err(other),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ParsingError {
     Incomplete,

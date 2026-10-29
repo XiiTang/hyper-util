@@ -537,13 +537,16 @@ where
 
         // If the host is already an IP addr (v4 or v6),
         // skip resolving the dns and start connecting right away.
+        // Keep the resolver's ownership through all candidate sockets. A caller
+        // may use the iterator itself to retain the admitted hostname/results.
+        let mut resolved;
         let addrs = if let Some(addrs) = dns::SocketAddrs::try_parse(host, port) {
             addrs
         } else {
-            let addrs = resolve(&mut self.resolver, dns::Name::new(host.into()))
+            resolved = resolve(&mut self.resolver, dns::Name::new(host.into()))
                 .await
                 .map_err(ConnectError::dns)?;
-            let addrs = addrs
+            let addrs = resolved.by_ref()
                 .map(|mut addr| {
                     set_port(&mut addr, port, dst.port().is_some());
 
@@ -659,6 +662,10 @@ impl ConnectError {
             addr: None,
             cause: Some(cause.into()),
         }
+    }
+
+    pub(super) fn admission(cause: super::SocketAdmissionRefused) -> Self {
+        Self::new("socket admission refused", cause)
     }
 
     fn dns<E>(cause: E) -> ConnectError

@@ -133,3 +133,24 @@ early tunnel bytes, and fmt pass with consumer Rust 1.97.0 and pinned
 hyper/h2 (exit 0). Strict all-target Clippy still exits 101 with the same
 15 library / 20 library-test diagnostics in unchanged files; none names
 this classifier or regression. No baseline repair or suppression.
+
+## W17b opener admission and transport custody
+
+Ported only SocketAdmission, SocketAdmissionRefused, SocketConnector and
+OwnedTransport from 41f87272, plus guarded SOCKS error extraction. The current
+1f833099 CONNECT, IPv6 and reused-connection fixes remain. No PoolLimit or
+legacy pool rewrite is ported.
+
+At upstream d480d9f8 and pinned http.rs::call_async, native DNS is collected
+into an unguarded Vec before candidate connect. Collection now borrows the
+original iterator and retains it through candidate destruction, including
+future cancellation. The TCP race and timeouts remain upstream's.
+SocketConnecting destroys a failed/cancelled native dial before its opaque
+guard; successful streams retain it through map and TLS/proxy extraction.
+SocketAdmissionRefused::new marks caller admission of DNS query/results as
+well as socket admission, so a SOCKS adapter can stop fallback without
+stringifying the original error. Ordinary native failures stay unmarked.
+
+Regression ports: tests/socket_ownership.rs and connect::owned::tests;
+execution against this port is pending. Boundless supplies the account, route
+and DNS ownership tests.

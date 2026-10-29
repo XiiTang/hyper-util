@@ -442,3 +442,11 @@ mod tests {
         assert_eq!(ex2.get::<Ex2>(), Some(&Ex2("hiccup")));
     }
 }
+
+mod owned;
+pub use owned::OwnedTransport;
+
+#[cfg(feature = "tokio")]
+mod socket;
+#[cfg(feature = "tokio")]
+pub use socket::{SocketAdmission, SocketAdmissionRefused, SocketConnector};
