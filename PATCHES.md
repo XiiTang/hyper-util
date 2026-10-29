@@ -162,3 +162,12 @@ before dialing, which would drop Boundless's DNS admission early. Both consumers
 (Boundless and its reqwest fork) already supply Send iterators. This bound at
 those two implementations is the only signature change required by the custody
 port; no other public signature is changed.
+
+W17b port validation on macOS arm64 with consumer Rust 1.97.0: the four
+socket-ownership integration tests and the OwnedTransport extraction unit test
+pass (exit 0), using the consumer's pinned hyper/h2. Strict `cargo clippy
+--features full --lib --tests -- -D warnings` exits 101: 15 library and 22
+library-test diagnostics in unchanged pool/client/cache, old constructors,
+DNS and server/test code. None names owned.rs, socket.rs or the retained
+resolver-iterator change. The diagnostic expressions and signatures remain in
+base 1f833099; no unrelated cleanup or lint suppression is included.
