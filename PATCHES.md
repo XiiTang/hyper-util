@@ -151,9 +151,8 @@ SocketAdmissionRefused::new marks caller admission of DNS query/results as
 well as socket admission, so a SOCKS adapter can stop fallback without
 stringifying the original error. Ordinary native failures stay unmarked.
 
-Regression ports: tests/socket_ownership.rs and connect::owned::tests;
-execution against this port is pending. Boundless supplies the account, route
-and DNS ownership tests.
+Regression ports: tests/socket_ownership.rs and connect::owned::tests.
+Boundless supplies the account, route and DNS ownership tests.
 
 The two Service implementations for HttpConnector and SocketConnector now require
 `R::Addrs: Send`. This intentional minimal restriction keeps resolution custody
@@ -171,3 +170,11 @@ library-test diagnostics in unchanged pool/client/cache, old constructors,
 DNS and server/test code. None names owned.rs, socket.rs or the retained
 resolver-iterator change. The diagnostic expressions and signatures remain in
 base 1f833099; no unrelated cleanup or lint suppression is included.
+
+The continuation also passes `pending_native_dial_keeps_the_collected_resolution_until_cancelled`
+at the real nonblocking TCP dial: an immediately ready resolver returns a guarded
+iterator, collection must retain that guard while the dial is pending, and
+cancellation destroys it. Upstream's consuming collection drops it before that
+point. All five socket-ownership tests now pass (exit 0); with the extraction
+unit test this is six focused tests. No public or production API changed in
+this test follow-up.

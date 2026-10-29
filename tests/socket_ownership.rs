@@ -45,6 +45,63 @@ impl Service<hyper_util::client::legacy::connect::dns::Name> for Resolver {
         })
     }
 }
+
+struct Resolution {
+    addresses: std::vec::IntoIter<std::net::SocketAddr>,
+    _guard: Guard,
+}
+impl Iterator for Resolution {
+    type Item = std::net::SocketAddr;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.addresses.next()
+    }
+}
+#[derive(Clone)]
+struct OwnedResolver {
+    address: std::net::SocketAddr,
+    live: Arc<AtomicUsize>,
+}
+impl Service<hyper_util::client::legacy::connect::dns::Name> for OwnedResolver {
+    type Response = Resolution;
+    type Error = std::io::Error;
+    type Future = std::future::Ready<Result<Resolution, Self::Error>>;
+    fn poll_ready(
+        &mut self,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn call(&mut self, _: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
+        self.live.fetch_add(1, Ordering::SeqCst);
+        std::future::ready(Ok(Resolution {
+            addresses: vec![self.address].into_iter(),
+            _guard: Guard {
+                live: self.live.clone(),
+                _send_only: Cell::new(()),
+            },
+        }))
+    }
+}
+
+#[tokio::test]
+async fn pending_native_dial_keeps_the_collected_resolution_until_cancelled() {
+    use std::future::Future;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let live = Arc::new(AtomicUsize::new(0));
+    let mut connector = HttpConnector::new_with_resolver(OwnedResolver {
+        address: listener.local_addr().unwrap(),
+        live: live.clone(),
+    });
+    let mut connecting = Box::pin(connector.call("http://owned.test/".parse().unwrap()));
+    // The resolver is immediately ready. Its consuming iterator has been
+    // collected when the actual nonblocking TCP dial first yields.
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(connecting.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(live.load(Ordering::SeqCst), 1);
+    drop(connecting);
+    assert_eq!(live.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn socket_permit_survives_adapter_extraction_until_physical_close() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
