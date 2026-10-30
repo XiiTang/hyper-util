@@ -200,6 +200,8 @@ impl<C> std::fmt::Display for SocksError<C> {
     }
 }
 
+// SOCKS services already require C::Error: 'static. The owned response
+// wrapper needs that same lifetime to expose its inner error as a source.
 impl<C: std::fmt::Debug + std::fmt::Display + 'static> std::error::Error for SocksError<C> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -391,11 +393,14 @@ mod returned_source_tests {
             read_observed(&mut peer, &mut BytesMut::new(), SocksReplyStage::Command).await;
         drop(peer);
         let error = result.err().unwrap();
-        let io = error
-            .source()
-            .unwrap()
-            .downcast_ref::<std::io::Error>()
-            .unwrap();
+        let mut cause = error.source();
+        let io = loop {
+            let current = cause.expect("the original I/O source survives its reply wrapper");
+            if let Some(io) = current.downcast_ref::<std::io::Error>() {
+                break io;
+            }
+            cause = current.source();
+        };
         assert_eq!(io.kind(), std::io::ErrorKind::Other);
         assert!(io.get_ref().unwrap().is::<Marker>());
         match error {
