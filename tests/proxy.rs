@@ -546,14 +546,11 @@ async fn an_invalid_connect_prefix_is_rejected_while_the_proxy_stays_open() {
 
 #[tokio::test]
 async fn final_connect_refusals_are_reported_while_the_proxy_stays_open() {
-    for (status, expected) in [
-        (
-            "407 Proxy Authentication Required",
-            "tunnel error: proxy authorization required",
-        ),
-        ("403 Forbidden", "tunnel error: unsuccessful"),
-        ("099 Invalid", "tunnel error: unsuccessful"),
-        ("101 Switching Protocols", "tunnel error: unsuccessful"),
+    for status in [
+        "407 Proxy Authentication Required",
+        "403 Forbidden",
+        "099 Invalid",
+        "101 Switching Protocols",
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy = format!("http://{}", listener.local_addr().unwrap())
@@ -584,16 +581,23 @@ async fn final_connect_refusals_are_reported_while_the_proxy_stays_open() {
         .await
         .expect("a known final refusal must not await headers or EOF");
         let error = result.err().unwrap();
-        assert_eq!(error.to_string(), expected);
         match error {
             TunnelError::Response {
                 head,
                 status: received,
                 head_complete,
-                ..
+                error,
             } => {
                 assert_eq!(received, status[..3].parse::<u16>().ok());
                 assert!(!head_complete);
+                assert!(if status.starts_with("407") {
+                    matches!(*error, TunnelError::ProxyAuthRequired)
+                } else {
+                    matches!(*error, TunnelError::TunnelUnsuccessful)
+                });
+                assert!(head
+                    .windows(3)
+                    .any(|bytes| bytes == &status.as_bytes()[..3]));
                 assert!(format!("HTTP/1.1 {status}\r\n")
                     .as_bytes()
                     .starts_with(&head));
