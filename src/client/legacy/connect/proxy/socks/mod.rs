@@ -200,11 +200,11 @@ impl<C> std::fmt::Display for SocksError<C> {
     }
 }
 
-impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {
+impl<C: std::fmt::Debug + std::fmt::Display + 'static> std::error::Error for SocksError<C> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::Response { error, .. } => error.source(),
+            Self::Response { error, .. } => Some(&**error),
             _ => None,
         }
     }
