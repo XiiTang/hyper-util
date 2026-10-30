@@ -662,3 +662,54 @@ async fn failed_socks_exchanges_keep_consumed_reply_and_original_auth_status() {
         }
     }
 }
+
+#[tokio::test]
+async fn failed_connect_reads_keep_exact_eof_and_head_limit_prefixes() {
+    for limit in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let bytes = if limit {
+            let mut bytes = b"HTTP/1.1 200 OK\r\nX: ".to_vec();
+            bytes.resize(8192, b'x');
+            bytes
+        } else {
+            b"HTTP/1.1 200 OK\r\nX: partial".to_vec()
+        };
+        let sent = bytes.clone();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            socket.write_all(&sent).await.unwrap();
+        });
+        let mut connector = Tunnel::new(proxy, HttpConnector::new());
+        let error = connector
+            .call("https://origin.test/".parse().unwrap())
+            .await
+            .err()
+            .unwrap();
+        peer.await.unwrap();
+        match error {
+            TunnelError::Response {
+                head,
+                status,
+                head_complete,
+                error,
+            } => {
+                assert_eq!(head.as_ref(), bytes);
+                assert_eq!(status, None);
+                assert!(!head_complete);
+                assert!(if limit {
+                    matches!(*error, TunnelError::ProxyHeadersTooLong)
+                } else {
+                    matches!(*error, TunnelError::TunnelUnexpectedEof)
+                });
+            }
+            other => panic!("lost the received prefix: {other}"),
+        }
+    }
+}

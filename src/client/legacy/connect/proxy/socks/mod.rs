@@ -367,3 +367,45 @@ mod parsing_boundary_tests {
         assert!(buf.is_empty());
     }
 }
+
+#[cfg(test)]
+mod returned_source_tests {
+    use super::*;
+    #[derive(Debug)]
+    struct Marker;
+    impl std::fmt::Display for Marker {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("typed transport failure")
+        }
+    }
+    impl std::error::Error for Marker {}
+    #[tokio::test]
+    async fn a_partial_command_keeps_its_original_io_source_after_the_transport_drops() {
+        use std::error::Error as _;
+        let peer = tokio_test::io::Builder::new()
+            .read(&[5, 0, 0, 1, 127])
+            .read_error(std::io::Error::other(Marker))
+            .build();
+        let mut peer = crate::rt::TokioIo::new(peer);
+        let result: Result<(v5::messages::ProxyRes, Bytes), SocksError<std::io::Error>> =
+            read_observed(&mut peer, &mut BytesMut::new(), SocksReplyStage::Command).await;
+        drop(peer);
+        let error = result.err().unwrap();
+        let io = error
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(io.kind(), std::io::ErrorKind::Other);
+        assert!(io.get_ref().unwrap().is::<Marker>());
+        match error {
+            SocksError::Response {
+                bytes, complete, ..
+            } => {
+                assert_eq!(bytes.as_ref(), &[5, 0, 0, 1, 127]);
+                assert!(!complete);
+            }
+            other => panic!("lost the consumed command prefix: {other}"),
+        }
+    }
+}
