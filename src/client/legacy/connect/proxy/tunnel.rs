@@ -28,20 +28,32 @@ enum Headers {
     Extra(HeaderMap),
 }
 
+/// Failure while opening a transport or establishing its CONNECT tunnel.
 #[derive(Debug)]
 pub enum TunnelError {
+    /// The underlying connector failed.
     ConnectFailed(Box<dyn StdError + Send + Sync>),
+    /// Tunnel I/O failed.
     Io(std::io::Error),
+    /// The target has no host.
     MissingHost,
+    /// The proxy requires authentication.
     ProxyAuthRequired,
+    /// The received head exceeds the native bound.
     ProxyHeadersTooLong,
+    /// The transport ended before a complete head.
     TunnelUnexpectedEof,
+    /// The proxy refused the tunnel or sent an invalid head.
     TunnelUnsuccessful,
     /// The received head at an unsuccessful native read/parse exit.
     Response {
+        /// The bytes already received for this head.
         head: bytes::Bytes,
+        /// The status actually parsed, if any.
         status: Option<u16>,
+        /// Whether the complete head boundary was parsed.
         head_complete: bool,
+        /// The original native error.
         error: Box<TunnelError>,
     },
 }

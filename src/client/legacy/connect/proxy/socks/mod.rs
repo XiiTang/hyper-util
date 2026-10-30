@@ -13,25 +13,39 @@ use bytes::{Buf, Bytes, BytesMut};
 
 use hyper::rt::Read;
 
+/// Failure while opening a transport or performing SOCKS negotiation.
 #[derive(Debug)]
 pub enum SocksError<C> {
+    /// The underlying connector failed.
     Inner(C),
+    /// SOCKS I/O failed.
     Io(std::io::Error),
 
+    /// No acceptable target address was resolved.
     DnsFailure,
+    /// The target has no host.
     MissingHost,
+    /// The target has no port.
     MissingPort,
 
+    /// A SOCKS4 refusal.
     V4(SocksV4Error),
+    /// A SOCKS5 refusal.
     V5(SocksV5Error),
 
+    /// The received reply is malformed or incomplete.
     Parsing(ParsingError),
+    /// The outgoing request could not be serialized.
     Serialize(SerializeError),
     /// The received reply at an unsuccessful native read/parse exit.
     Response {
+        /// The reply being read.
         stage: SocksReplyStage,
+        /// Only the bytes consumed or examined for this reply.
         bytes: Bytes,
+        /// Whether the reply was completely parsed.
         complete: bool,
+        /// The original native error.
         error: Box<SocksError<C>>,
     },
 }
@@ -39,8 +53,11 @@ pub enum SocksError<C> {
 /// Which SOCKS5 reply the native parser was reading.
 #[derive(Debug, Clone, Copy)]
 pub enum SocksReplyStage {
+    /// Method negotiation (RFC 1928).
     Method,
+    /// Username/password authentication (RFC 1929).
     Authentication,
+    /// The SOCKS command reply (RFC 1928).
     Command,
 }
 
