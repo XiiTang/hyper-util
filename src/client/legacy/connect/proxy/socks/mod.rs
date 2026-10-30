@@ -180,6 +180,9 @@ where
 
 impl<C> std::fmt::Display for SocksError<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Self::Response { error, .. } = self {
+            return error.fmt(f);
+        }
         f.write_str("SOCKS error: ")?;
 
         match self {
@@ -195,7 +198,7 @@ impl<C> std::fmt::Display for SocksError<C> {
 
             Self::V4(e) => e.fmt(f),
             Self::V5(e) => e.fmt(f),
-            Self::Response { error, .. } => error.fmt(f),
+            Self::Response { .. } => unreachable!(),
         }
     }
 }
