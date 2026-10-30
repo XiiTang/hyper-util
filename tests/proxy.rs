@@ -2,7 +2,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower_service::Service;
 
-use hyper_util::client::legacy::connect::proxy::{SocksV4, SocksV5, Tunnel};
+use hyper_util::client::legacy::connect::proxy::{
+    SocksError, SocksReplyStage, SocksV4, SocksV5, Tunnel, TunnelError,
+};
 use hyper_util::client::legacy::connect::HttpConnector;
 
 #[cfg(not(miri))]
@@ -581,7 +583,82 @@ async fn final_connect_refusals_are_reported_while_the_proxy_stays_open() {
         )
         .await
         .expect("a known final refusal must not await headers or EOF");
-        assert_eq!(result.err().unwrap().to_string(), expected);
+        let error = result.err().unwrap();
+        assert_eq!(error.to_string(), expected);
+        match error {
+            TunnelError::Response {
+                head,
+                status: received,
+                head_complete,
+                ..
+            } => {
+                assert_eq!(received, status[..3].parse::<u16>().ok());
+                assert!(!head_complete);
+                assert!(format!("HTTP/1.1 {status}\r\n")
+                    .as_bytes()
+                    .starts_with(&head));
+                assert!(!head.is_empty());
+            }
+            other => panic!("lost the native received status: {other}"),
+        }
         server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_socks_exchanges_keep_consumed_reply_and_original_auth_status() {
+    for authentication in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut greeting = [0; 3];
+            stream.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting, [5, 1, if authentication { 2 } else { 0 }]);
+            stream.write_all(&[5, greeting[2]]).await.unwrap();
+            if authentication {
+                let mut auth = [0; 5];
+                stream.read_exact(&mut auth).await.unwrap();
+                assert_eq!(&auth, &[1, 1, b'u', 1, b'p']);
+                stream.write_all(&[1, 7]).await.unwrap();
+            } else {
+                // IPv4 command request, then a malformed address type followed
+                // by bytes the parser never examines.
+                let mut command = [0; 10];
+                stream.read_exact(&mut command).await.unwrap();
+                stream.write_all(&[5, 0, 0, 255, 9, 8, 7]).await.unwrap();
+            }
+        });
+        let mut connector = SocksV5::new(proxy, HttpConnector::new());
+        if authentication {
+            connector = connector.with_auth("u".into(), "p".into());
+        }
+        let error = connector
+            .call("http://127.0.0.1:80".parse().unwrap())
+            .await
+            .err()
+            .unwrap();
+        peer.await.unwrap();
+        match error {
+            SocksError::Response {
+                stage,
+                bytes,
+                complete,
+                ..
+            } => {
+                if authentication {
+                    assert!(matches!(stage, SocksReplyStage::Authentication));
+                    assert_eq!(bytes.as_ref(), &[1, 7]);
+                    assert!(complete);
+                } else {
+                    assert!(matches!(stage, SocksReplyStage::Command));
+                    assert_eq!(bytes.as_ref(), &[5, 0, 0, 255]);
+                    assert!(!complete);
+                }
+            }
+            other => panic!("lost the consumed reply: {other}"),
+        }
     }
 }

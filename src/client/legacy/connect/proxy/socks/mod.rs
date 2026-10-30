@@ -9,7 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 
 use hyper::rt::Read;
 
@@ -27,9 +27,35 @@ pub enum SocksError<C> {
 
     Parsing(ParsingError),
     Serialize(SerializeError),
+    /// The received reply at an unsuccessful native read/parse exit.
+    Response {
+        stage: SocksReplyStage,
+        bytes: Bytes,
+        complete: bool,
+        error: Box<SocksError<C>>,
+    },
+}
+
+/// Which SOCKS5 reply the native parser was reading.
+#[derive(Debug, Clone, Copy)]
+pub enum SocksReplyStage {
+    Method,
+    Authentication,
+    Command,
 }
 
 impl<C> SocksError<C> {
+    fn response(self, stage: SocksReplyStage, bytes: Bytes, complete: bool) -> Self {
+        if bytes.is_empty() {
+            return self;
+        }
+        Self::Response {
+            stage,
+            bytes,
+            complete,
+            error: Box::new(self),
+        }
+    }
     /// Borrow an underlying connector failure, if this is one.
     pub fn connection_error(&self) -> Option<&C> {
         match self {
@@ -92,6 +118,49 @@ where
     }
 }
 
+// Unlike read_message (also used by SOCKS4), this preserves the SOCKS5
+// parser's exact consumed slice before the caller reduces its status.
+async fn read_observed<T, M, C>(
+    conn: &mut T,
+    buf: &mut BytesMut,
+    stage: SocksReplyStage,
+) -> Result<(M, Bytes), SocksError<C>>
+where
+    T: Read + Unpin,
+    M: for<'a, 'b> TryFrom<&'a mut &'b [u8], Error = ParsingError>,
+{
+    let mut tmp = [0; 513];
+    loop {
+        let mut view = &buf[..];
+        match M::try_from(&mut view) {
+            Ok(result) => {
+                let consumed = buf.len() - view.len();
+                return Ok((result, buf.split_to(consumed).freeze()));
+            }
+            Err(ParsingError::Incomplete) => {}
+            Err(error) => {
+                let consumed = buf.len() - view.len();
+                return Err(SocksError::Parsing(error).response(
+                    stage,
+                    Bytes::copy_from_slice(&buf[..consumed]),
+                    false,
+                ));
+            }
+        }
+        let n = crate::rt::read(conn, &mut tmp).await.map_err(|error| {
+            SocksError::Io(error).response(stage, Bytes::copy_from_slice(buf), false)
+        })?;
+        if n == 0 {
+            return Err(SocksError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ))
+            .response(stage, Bytes::copy_from_slice(buf), false));
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+}
+
 impl<C> std::fmt::Display for SocksError<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SOCKS error: ")?;
@@ -109,11 +178,20 @@ impl<C> std::fmt::Display for SocksError<C> {
 
             Self::V4(e) => e.fmt(f),
             Self::V5(e) => e.fmt(f),
+            Self::Response { error, .. } => error.fmt(f),
         }
     }
 }
 
-impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {}
+impl<C: std::fmt::Debug + std::fmt::Display> std::error::Error for SocksError<C> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Response { error, .. } => error.source(),
+            _ => None,
+        }
+    }
+}
 
 impl<C> From<std::io::Error> for SocksError<C> {
     fn from(err: std::io::Error) -> Self {

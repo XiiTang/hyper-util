@@ -13,7 +13,7 @@ use tower_service::Service;
 
 use bytes::BytesMut;
 
-use super::{Handshaking, SocksError};
+use super::{Handshaking, SocksError, SocksReplyStage};
 
 /// Tunnel Proxy via SOCKSv5
 ///
@@ -159,14 +159,20 @@ impl SocksConfig {
                 }
 
                 State::ReadingNegRes => {
-                    let res: NegotiationRes = super::read_message(&mut conn, &mut recv_buf).await?;
+                    let (res, bytes): (NegotiationRes, _) =
+                        super::read_observed(&mut conn, &mut recv_buf, SocksReplyStage::Method)
+                            .await?;
 
                     if res.0 == AuthMethod::NoneAcceptable {
-                        return Err(SocksV5Error::Auth(AuthError::Unsupported).into());
+                        return Err(SocksError::from(SocksV5Error::Auth(AuthError::Unsupported))
+                            .response(SocksReplyStage::Method, bytes, true));
                     }
 
                     if res.0 != method {
-                        return Err(SocksV5Error::Auth(AuthError::MethodMismatch).into());
+                        return Err(SocksError::from(SocksV5Error::Auth(
+                            AuthError::MethodMismatch,
+                        ))
+                        .response(SocksReplyStage::Method, bytes, true));
                     }
 
                     if self.optimistic {
@@ -198,11 +204,16 @@ impl SocksConfig {
                 }
 
                 State::ReadingAuthRes => {
-                    let res: AuthenticationRes =
-                        super::read_message(&mut conn, &mut recv_buf).await?;
+                    let (res, bytes): (AuthenticationRes, _) = super::read_observed(
+                        &mut conn,
+                        &mut recv_buf,
+                        SocksReplyStage::Authentication,
+                    )
+                    .await?;
 
                     if !res.0 {
-                        return Err(SocksV5Error::Auth(AuthError::Failed).into());
+                        return Err(SocksError::from(SocksV5Error::Auth(AuthError::Failed))
+                            .response(SocksReplyStage::Authentication, bytes, true));
                     }
 
                     if self.optimistic {
@@ -227,12 +238,18 @@ impl SocksConfig {
                 }
 
                 State::ReadingProxyRes => {
-                    let res: ProxyRes = super::read_message(&mut conn, &mut recv_buf).await?;
+                    let (res, bytes): (ProxyRes, _) =
+                        super::read_observed(&mut conn, &mut recv_buf, SocksReplyStage::Command)
+                            .await?;
 
                     if res.0 == Status::Success {
                         return Ok(conn);
                     } else {
-                        return Err(SocksV5Error::Command(res.0).into());
+                        return Err(SocksError::from(SocksV5Error::Command(res.0)).response(
+                            SocksReplyStage::Command,
+                            bytes,
+                            true,
+                        ));
                     }
                 }
             }

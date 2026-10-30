@@ -178,3 +178,18 @@ cancellation destroys it. Upstream's consuming collection drops it before that
 point. All five socket-ownership tests now pass (exit 0); with the extraction
 unit test this is six focused tests. No public or production API changed in
 this test follow-up.
+
+
+## W5-D8: returned error and received reply fidelity
+
+Upstream d480d9f8 discards CONNECT heads/status and consumed SOCKS replies
+at error exits; SocksError exposes no I/O source. Retain only already read
+head/consumed reply bytes and original authentication status in returned error
+wrappers, before parser advancement or bool/enum reduction. Expose existing
+I/O sources; callers still extract generic lower connector errors through the
+existing connection_error API. No connector bounds change.
+The pinned immediate CONNECT refusal, informational/success parsing, early
+tunnel-byte preservation, receive bounds and SOCKS addressing remain. No read
+is added to finish evidence; malformed replies retain only examined prefixes.
+
+Regression results are pending the targeted implementation checks.

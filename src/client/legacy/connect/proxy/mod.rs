@@ -2,5 +2,5 @@
 mod socks;
 mod tunnel;
 
-pub use self::socks::{SocksV4, SocksV5};
-pub use self::tunnel::Tunnel;
+pub use self::socks::{SocksError, SocksReplyStage, SocksV4, SocksV5};
+pub use self::tunnel::{Tunnel, TunnelError};

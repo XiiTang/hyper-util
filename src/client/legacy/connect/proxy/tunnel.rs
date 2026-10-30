@@ -37,6 +37,27 @@ pub enum TunnelError {
     ProxyHeadersTooLong,
     TunnelUnexpectedEof,
     TunnelUnsuccessful,
+    /// The received head at an unsuccessful native read/parse exit.
+    Response {
+        head: bytes::Bytes,
+        status: Option<u16>,
+        head_complete: bool,
+        error: Box<TunnelError>,
+    },
+}
+
+impl TunnelError {
+    fn response(self, head: &[u8], status: Option<u16>, head_complete: bool) -> Self {
+        if head.is_empty() {
+            return self;
+        }
+        Self::Response {
+            head: bytes::Bytes::copy_from_slice(head),
+            status,
+            head_complete,
+            error: Box::new(self),
+        }
+    }
 }
 
 pin_project! {
@@ -206,28 +227,40 @@ where
 
     loop {
         if pos == buf.len() {
-            return Err(TunnelError::ProxyHeadersTooLong);
+            return Err(TunnelError::ProxyHeadersTooLong.response(&buf[start..pos], None, false));
         }
         // The generic connector has no unread operation. Reading one byte here
         // leaves every tunneled byte in the original transport.
         let n = crate::rt::read(&mut conn, &mut buf[pos..pos + 1])
             .await
-            .map_err(TunnelError::Io)?;
+            .map_err(|error| TunnelError::Io(error).response(&buf[start..pos], None, false))?;
         if n == 0 {
-            return Err(TunnelError::TunnelUnexpectedEof);
+            return Err(TunnelError::TunnelUnexpectedEof.response(&buf[start..pos], None, false));
         }
         pos += n;
         let mut headers = [httparse::EMPTY_HEADER; 128];
         let mut response = httparse::Response::new(&mut headers);
         let status = response
             .parse(&buf[start..pos])
-            .map_err(|_| TunnelError::TunnelUnsuccessful)?;
+            .map_err(|_| TunnelError::TunnelUnsuccessful.response(&buf[start..pos], None, false))?;
         // Upstream reports a known refusal without waiting for the remaining
         // headers. Partial informational/success heads still need their boundary.
         match response.code {
-            Some(407) => return Err(TunnelError::ProxyAuthRequired),
+            Some(407) => {
+                return Err(TunnelError::ProxyAuthRequired.response(
+                    &buf[start..pos],
+                    response.code,
+                    status.is_complete(),
+                ))
+            }
             Some(100 | 102..=299) | None => {}
-            Some(_) => return Err(TunnelError::TunnelUnsuccessful),
+            Some(_) => {
+                return Err(TunnelError::TunnelUnsuccessful.response(
+                    &buf[start..pos],
+                    response.code,
+                    status.is_complete(),
+                ))
+            }
         }
         if status.is_partial() {
             continue;
@@ -238,14 +271,21 @@ where
         }
         return match response.code {
             Some(200..=299) => Ok(conn),
-            Some(407) => Err(TunnelError::ProxyAuthRequired),
-            _ => Err(TunnelError::TunnelUnsuccessful),
+            Some(407) => {
+                Err(TunnelError::ProxyAuthRequired.response(&buf[start..pos], response.code, true))
+            }
+            _ => {
+                Err(TunnelError::TunnelUnsuccessful.response(&buf[start..pos], response.code, true))
+            }
         };
     }
 }
 
 impl std::fmt::Display for TunnelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Self::Response { error, .. } = self {
+            return error.fmt(f);
+        }
         f.write_str("tunnel error: ")?;
 
         f.write_str(match self {
@@ -256,6 +296,7 @@ impl std::fmt::Display for TunnelError {
             TunnelError::TunnelUnsuccessful => "unsuccessful",
             TunnelError::ConnectFailed(_) => "failed to create underlying connection",
             TunnelError::Io(_) => "io error establishing tunnel",
+            TunnelError::Response { .. } => unreachable!(),
         })
     }
 }
@@ -265,6 +306,7 @@ impl std::error::Error for TunnelError {
         match self {
             TunnelError::Io(ref e) => Some(e),
             TunnelError::ConnectFailed(ref e) => Some(&**e),
+            TunnelError::Response { error, .. } => Some(&**error),
             _ => None,
         }
     }
