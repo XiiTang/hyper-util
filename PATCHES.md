@@ -192,9 +192,11 @@ The pinned immediate CONNECT refusal, informational/success parsing, early
 tunnel-byte preservation, receive bounds and SOCKS addressing remain. No read
 is added to finish evidence; malformed replies retain only examined prefixes.
 
-Regression evidence on macOS arm64, Rust 1.98.0, through build-slot:
+Regression evidence on macOS arm64, Rust 1.98.1, through build-slot:
 
 - `cargo test -p hyper-util --locked --features full --config <consumer patches> -- final_connect_refusals failed_socks_exchanges fragmented_connect failed_connect_reads returned_source_tests`: exit 0, five tests passed. Real CONNECT peers cover immediate final refusal, exact EOF/8192-byte prefixes and preserved early tunnel bytes. SOCKS peers cover original authentication status and an examined malformed command prefix; the typed I/O test keeps its source after native destruction.
 - Strict `cargo clippy -p hyper-util --lib --tests --locked --features full --config <consumer patches> -- -D warnings`: exit 101, 17 library and 24 library-test diagnostics, all in files unchanged from aa6eb542 (legacy client/pool/connect HTTP/DNS, client cache/singleton and server auto). No D8 diagnostic, unrelated fix or waiver.
+
+The final targeted preservation rerun used the same feature/config selection and exited 0: eleven tests passed (the five reply/source cases above, reused-connection retry opt-out/unstarted preservation, and all five socket/DNS admission and transport-extraction ownership cases).
 
 The consumer patch configuration selects its pinned hyper/rustls and the D8 h2/reqwest work branches. Boundless's adapter tests exercise the published Git pins, including the declared-hop and optional-capture effects. Pre-landing lanes remain the landing owner's gate.
