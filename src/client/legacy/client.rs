@@ -22,7 +22,7 @@ use tracing::{debug, trace, warn};
 use super::connect::capture::CaptureConnectionExtension;
 #[cfg(feature = "tokio")]
 use super::connect::HttpConnector;
-use super::connect::{Alpn, Connect, Connected, Connection};
+use super::connect::{Alpn, Connect, Connected, Connection, ConnectionAdmission};
 use super::pool::{self, Ver};
 
 use crate::common::{lazy as hyper_lazy, timer, Exec, Lazy, SyncWrapper};
@@ -281,7 +281,10 @@ where
         pool_key: PoolKey,
     ) -> Result<Response<hyper::body::Incoming>, TrySendError<B>> {
         let mut pooled = self
-            .connection_for(pool_key)
+            .connection_for(
+                pool_key,
+                req.extensions().get::<ConnectionAdmission>().is_some(),
+            )
             .await
             // `connection_for` already retries checkout errors, so if
             // it returns an error, there's not much else to retry
@@ -289,6 +292,17 @@ where
 
         if let Some(conn) = req.extensions_mut().get_mut::<CaptureConnectionExtension>() {
             conn.set(&pooled.conn_info);
+        }
+
+        if let Some(admission) = req.extensions().get::<ConnectionAdmission>() {
+            admission
+                .check(pooled.conn_info.clone())
+                .await
+                .map_err(|error| {
+                    TrySendError::Nope(
+                        e!(SendRequest, error).with_connect_info(pooled.conn_info.clone()),
+                    )
+                })?;
         }
 
         if pooled.is_http1() {
@@ -372,9 +386,10 @@ where
     async fn connection_for(
         &self,
         pool_key: PoolKey,
+        foreground: bool,
     ) -> Result<pool::Pooled<PoolClient<B>, PoolKey>, Error> {
         loop {
-            match self.one_connection_for(pool_key.clone()).await {
+            match self.one_connection_for(pool_key.clone(), foreground).await {
                 Ok(pooled) => return Ok(pooled),
                 Err(ClientConnectError::Normal(err)) => return Err(err),
                 Err(ClientConnectError::CheckoutIsClosed(reason)) => {
@@ -395,6 +410,7 @@ where
     async fn one_connection_for(
         &self,
         pool_key: PoolKey,
+        foreground: bool,
     ) -> Result<pool::Pooled<PoolClient<B>, PoolKey>, ClientConnectError> {
         // Return a single connection if pooling is not enabled
         if !self.pool.is_enabled() {
@@ -402,6 +418,31 @@ where
                 .connect_to(pool_key)
                 .await
                 .map_err(ClientConnectError::Normal);
+        }
+
+        if foreground {
+            // A caller's dial may await authority. Never leave an unused dial
+            // running if a connection returns to the pool while it waits.
+            if let Some(result) = self.pool.checkout(pool_key.clone()).now_or_never() {
+                match result {
+                    Ok(pooled) => return Ok(pooled),
+                    Err(error) if error.is_canceled() => {}
+                    Err(error) => return Err(ClientConnectError::Normal(e!(Connect, error))),
+                }
+            }
+            return match self.connect_to(pool_key.clone()).await {
+                Ok(pooled) => Ok(pooled),
+                Err(error) if error.is_canceled() => {
+                    self.pool.checkout(pool_key).await.map_err(|error| {
+                        if self.config.ver == Ver::Http2 && error.is_canceled() {
+                            ClientConnectError::CheckoutIsClosed(error)
+                        } else {
+                            ClientConnectError::Normal(e!(Connect, error))
+                        }
+                    })
+                }
+                Err(error) => Err(ClientConnectError::Normal(error)),
+            };
         }
 
         // This actually races 2 different futures to try to get a ready

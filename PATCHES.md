@@ -200,3 +200,38 @@ Regression evidence on macOS arm64, Rust 1.98.1, through build-slot:
 The final targeted preservation rerun used the same feature/config selection and exited 0: eleven tests passed (the five reply/source cases above, reused-connection retry opt-out/unstarted preservation, and all five socket/DNS admission and transport-extraction ownership cases).
 
 The consumer patch configuration selects its pinned hyper/rustls and the D8 h2/reqwest work branches. Boundless's adapter tests exercise the published Git pins, including the declared-hop and optional-capture effects. Pre-landing lanes remain the landing owner's gate.
+
+## Selected-connection admission (Access limits R4)
+
+Upstream's legacy client selects a pooled/new sender, publishes capture metadata
+and dispatches the request. A caller cannot asynchronously admit that selected
+peer before bytes are sent. Its normal checkout/connect race also continues a
+started losing connector in the background; that is inappropriate when dialing
+can await caller authority that the request never uses.
+
+`ConnectionAdmission` is an opt-in, clonable request extension. The requesting
+future retains its selected `Pooled`, awaits the callback after capture and
+before sending, and returns its original source as a non-retryable unsent error
+on refusal. It uses `Connected`'s existing private clone; no public Clone contract
+is added. Cancellation drops that future/reservation through the unchanged pool
+Drop paths, leaving shared HTTP/2 senders and other streams usable. For requests
+with this extension only, an immediately ready checkout wins; otherwise the
+pending checkout is dropped and the ordinary connect stays in the foreground.
+Existing HTTP/2 connecting/ALPN cancellation still joins ordinary checkout and
+keeps its closed/error/retry handling. No admission task or losing dial is
+spawned. Requests without the extension retain upstream's race, background
+completion, cancellation and retry behavior. No timeout or pool policy is added.
+
+`tests/connection_admission.rs` drives owned HTTP/1 and HTTP/2 peers: a pending
+admission sends no request, cancellation/refusal leaves a reused sender usable,
+a pool return cannot abandon an acquiring foreground dial, dropping that request
+actually drops its dial, and concurrent HTTP/2 initial connections/arbitration
+and admitted/refused streams remain independent. Existing source/error, socket
+ownership, CONNECT, reused-retry and pool regressions remain intact.
+
+On macOS arm64, consumer Rust 1.97.0 with its pinned hyper/h2, all-feature tests
+pass (141 passed, nine ignored, including docs); the additional concurrent
+initial-HTTP/2 admission regression passes. Formatting passes. Strict all-target
+Clippy exits101 with the same 15 library /20 library-test diagnostics on the
+untouched d3b039f pin and this patch (identical diagnostic message multisets).
+No lint is suppressed and no unrelated baseline repair is included.

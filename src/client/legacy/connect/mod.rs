@@ -82,6 +82,9 @@ mod http;
 
 pub mod proxy;
 
+mod admission;
+pub use admission::ConnectionAdmission;
+
 pub(crate) mod capture;
 pub use capture::{capture_connection, CaptureConnection};
 
